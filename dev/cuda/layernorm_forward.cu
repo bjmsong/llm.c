@@ -40,12 +40,14 @@ void layernorm_forward_cpu(float* out, float* mean, float* rstd,
         for (int t = 0; t < T; t++) {
             // seek to the input position inp[b,t,:]
             const float* x = inp + b * T * C + t * C;
+
             // calculate the mean
             float m = 0.0f;
             for (int i = 0; i < C; i++) {
                 m += x[i];
             }
             m = m/C;
+
             // calculate the variance (without any bias correction)
             float v = 0.0f;
             for (int i = 0; i < C; i++) {
@@ -53,10 +55,14 @@ void layernorm_forward_cpu(float* out, float* mean, float* rstd,
                 v += xshift * xshift;
             }
             v = v/C;
+
             // calculate the rstd
             float s = 1.0f / sqrtf(v + eps);
+
             // seek to the output position in out[b,t,:]
             float* out_bt = out + b * T * C + t * C;
+
+            // calculate the output
             for (int i = 0; i < C; i++) {
                 float n = (s * (x[i] - m)); // normalized output
                 float o = n * weight[i] + bias[i]; // scale and shift it
@@ -122,6 +128,7 @@ __global__ void mean_kernel(float* mean, const float* inp, int N, int C, int blo
     }
     shared[tid] = sum;
     __syncthreads();
+
     // reductions
     for (int stride = block_size / 2; stride >= 1; stride /= 2) {
         __syncthreads();
@@ -129,6 +136,7 @@ __global__ void mean_kernel(float* mean, const float* inp, int N, int C, int blo
             shared[tid] += shared[tid + stride];
         }
     }
+
     // write the final result (at thread 0) to global memory
     if (tid == 0) {
         mean[idx] = shared[0] / C;
@@ -538,8 +546,8 @@ int main(int argc, char **argv) {
     srand(0);
 
     int B = 8;
-    int T = 1024;
-    int C = 768;
+    int T = 1024;  // sequence length
+    int C = 768;   // channels, feature size
 
     int deviceIdx = 0;
     cudaCheck(cudaSetDevice(deviceIdx));
@@ -608,7 +616,16 @@ int main(int argc, char **argv) {
         long memory_ops = (2 * B * T * C) * 4; // *4 for float
         float memory_bandwidth = memory_ops / elapsed_time / 1e6;
 
-        printf("block_size %4d | time %.4f ms | bandwidth %.2f GB/s\n", block_size, elapsed_time, memory_bandwidth);
+        /*
+        计算均值：（求和）BTC + （平均）BT 
+        计算方差: （减去均值+求平方+求和）3BTC + （求平均+开根号）2BT  
+        归一化：(减去均值+除以标准差)2BTC
+        缩放和偏移：（乘以权重+加上偏置）2BTC
+        */
+        long flop = (B * T * C) * 8 + (B * T) * 3;
+        float flops = flop / elapsed_time / 1e9;
+
+        printf("block_size %4d | time %.4f ms | bandwidth %.2f GB/s | FLOPS %.2f TFLOPS \n", block_size, elapsed_time, memory_bandwidth, flops);
     }
 
     // free memory
