@@ -23,9 +23,9 @@ verstion 5 allocates blocks per row instead of warps per row, same alg as 4 othe
 
 #include <stdio.h>
 #include <stdlib.h>
+#define _CG_ABI_EXPERIMENTAL 
 #include <cuda_runtime.h>
 #include <assert.h>
-#define _CG_ABI_EXPERIMENTAL  // 启用实验性功能
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include "common.h"
@@ -116,6 +116,62 @@ __global__ void layernorm_forward_kernel1(float* out, float* mean, float* rstd,
         rstd[idx] = s;
     }
 }
+
+__global__ void layernorm_forward_kernel8(float* out, const float* inp, const float* weight, 
+                                 const float* bias, int C) {
+    int idx = blockIdx.x;   // [0, B*T)
+    int tid = threadIdx.x;  // [0, block_size)
+    const float* x = inp + idx * C;
+    out = out + idx * C;
+
+    // 1. calculate mean
+    extern __shared__ float shared[];
+    // thread coarsening
+    float sum = 0.0f;
+    for (int i = tid; i < C; i += blockDim.x) {
+        sum += x[i];
+    }
+    shared[tid] = sum;
+    __syncthreads();
+    // reduction
+    for (int stride = blockDim.x / 2; stride >= 1; stride /= 2) {
+        if (tid < stride) {
+            shared[tid] += shared[tid + stride];
+        }
+        __syncthreads();
+    }
+    float mean = 0.0f;
+    if (tid == 0) {
+        mean = shared[tid]/C;        
+    }
+
+    // 2. calculate rstd
+   // thread coarsening
+    sum = 0.0f;
+    for (int i = tid; i < C; i += blockDim.x) {
+        float diff = x[i] - mean;
+        sum += diff * diff;
+    }
+    shared[tid] = sum;
+    __syncthreads();
+    // reductions
+    for (int stride = blockDim.x / 2; stride >= 1; stride /= 2) {
+        if (tid < stride) {
+            shared[tid] += shared[tid + stride];
+        }
+        __syncthreads();
+    }
+    float rstd = 0.0f;
+    if (tid == 0) {
+        rstd  = 1.0f / sqrtf(shared[0] / C + 1e-5f);
+    }
+
+    // 3. norm input, write to output
+    for (int i = tid; i < C; i += blockDim.x) {
+        out[i] = (x[i] - mean) * rstd * weight[i] + bias[i];
+    }
+}
+
 
 __global__ void mean_kernel(float* mean, const float* inp, int N, int C, int block_size) {
     extern __shared__ float shared[];
@@ -487,6 +543,15 @@ void layernorm_forward1(float* out, float* mean, float* rstd,
     cudaCheck(cudaGetLastError());
 }
 
+void layernorm_forward8(float* out, float* mean, float* rstd,
+                           const float* inp, const float* weight, const float* bias,
+                           int B, int T, int C,
+                           const int block_size) {
+    const int N = B * T;
+    layernorm_forward_kernel8<<<N, block_size>>>(out, inp, weight, bias, C);
+    cudaCheck(cudaGetLastError());
+}
+
 void layernorm_forward2(float* out, float* mean, float* rstd,
                        const float* inp, const float* weight, const float* bias,
                        int B, int T, int C,
@@ -603,6 +668,9 @@ void layernorm_forward(int kernel_num,
             break;
         case 7:
             layernorm_forward7(out, mean, rstd, inp, weight, bias, B, T, C, block_size);
+            break;
+        case 8:
+            layernorm_forward8(out, mean, rstd, inp, weight, bias, B, T, C, block_size);
             break;
         default:
             printf("Invalid kernel number\n");

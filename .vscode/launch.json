@@ -6,7 +6,7 @@
             "request": "launch",
             "name": "CUDA C++: Launch",
             "program": "${workspaceFolder}/dev/cuda/layernorm_forward",
-            "args": [],
+            "args": [8],
             "cwd": "${workspaceFolder}",
         }
     ]
