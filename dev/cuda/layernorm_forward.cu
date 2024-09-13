@@ -25,6 +25,7 @@ verstion 5 allocates blocks per row instead of warps per row, same alg as 4 othe
 #include <stdlib.h>
 #include <cuda_runtime.h>
 #include <assert.h>
+#define _CG_ABI_EXPERIMENTAL  // 启用实验性功能
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include "common.h"
@@ -191,6 +192,7 @@ __global__ void layernorm_forward_kernel3(float* __restrict__ out, float* __rest
                                     const float* __restrict__ bias, int N, int C) {
     namespace cg = cooperative_groups;
     cg::thread_block block = cg::this_thread_block();
+    // tile the block threads into 32 threads each (aka. size of a warp)
     cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
     // meta_group_size is the number of warps in a block, and meta_group_rank is the warp index
     int idx = blockIdx.x * warp.meta_group_size() + warp.meta_group_rank();
@@ -206,6 +208,58 @@ __global__ void layernorm_forward_kernel3(float* __restrict__ out, float* __rest
     for (int i = warp.thread_rank(); i < C; i += warp.size()) {
         sum += x[i];
     }
+    // synchronize包含在cg::reduce里面了
+    sum = cg::reduce(warp, sum, cg::plus<float>{});
+    float m = sum / C;
+    if(warp.thread_rank() == 0 && mean != nullptr) {
+        __stcs(mean + idx, m);
+    }
+
+    // rstd
+    sum = 0.0f;
+    for (int i = warp.thread_rank(); i < C; i += warp.size()) {
+        float diff = x[i] - m;
+        sum += diff * diff;
+    }
+    sum = cg::reduce(warp, sum, cg::plus<float>{});
+    float s = rsqrtf(sum / C + 1e-5f);
+    if(warp.thread_rank() == 0 && rstd != nullptr) {
+        __stcs(rstd + idx, s);
+    }
+
+    // final normalization and scaling by weight/bias
+    float* o = out + idx * C;
+    for (int c = warp.thread_rank(); c < C; c += warp.size()) {
+        // load and store using the .cs "streaming" hint to the compiler,
+        // indicating that this data will not be reused soon, and can be streamed through the caches
+        // this allows the threads to get more cache-hits for the (shared) weight and bias parameters
+        float n = s * (__ldcs(x+c) - m);
+        __stcs(o+c, n * weight[c] + bias[c]);
+    }
+}
+
+__global__ void layernorm_forward_kernel7(float* __restrict__ out, float* __restrict__ mean, float* __restrict__ rstd,
+                                    const float*  __restrict__ inp, const float*  __restrict__ weight,
+                                    const float* __restrict__ bias, int N, int C) {
+    namespace cg = cooperative_groups;
+    cg::thread_block block = cg::this_thread_block();
+    // tile the block threads into 32 threads each (aka. size of a warp)
+    cg::thread_block_tile<64> warp = cg::experimental::tiled_partition<64>(block);
+    // meta_group_size is the number of warps in a block, and meta_group_rank is the warp index
+    int idx = blockIdx.x * warp.meta_group_size() + warp.meta_group_rank();
+    if(idx >= N) {
+        return;
+    }
+
+    // the row of input that this group of threads is responsible for
+    const float* x = inp + idx * C;
+
+    // mean
+    float sum = 0.0f;
+    for (int i = warp.thread_rank(); i < C; i += warp.size()) {
+        sum += x[i];
+    }
+    // synchronize包含在cg::reduce里面了
     sum = cg::reduce(warp, sum, cg::plus<float>{});
     float m = sum / C;
     if(warp.thread_rank() == 0 && mean != nullptr) {
@@ -461,6 +515,19 @@ void layernorm_forward3(float* out, float* mean, float* rstd,
     cudaCheck(cudaGetLastError());
 }
 
+
+void layernorm_forward7(float* out, float* mean, float* rstd,
+                       const float* inp, const float* weight, const float* bias,
+                       int B, int T, int C,
+                       const int block_size) {
+    assert(block_size % 64 == 0);
+    const int N = B * T;
+    const int grid_size = ceil_div(N * 64, block_size);
+    layernorm_forward_kernel7<<<grid_size, block_size>>>(out, mean, rstd, inp, weight, bias, N, C);
+    cudaCheck(cudaGetLastError());
+}
+
+
 void layernorm_forward4(float* out, float* mean, float* rstd,
                        const float* inp, const float* weight, const float* bias,
                        int B, int T, int C,
@@ -534,6 +601,9 @@ void layernorm_forward(int kernel_num,
         case 6:
             layernorm_forward6(out, mean, rstd, inp, weight, bias, B, T, C, block_size);
             break;
+        case 7:
+            layernorm_forward7(out, mean, rstd, inp, weight, bias, B, T, C, block_size);
+            break;
         default:
             printf("Invalid kernel number\n");
             exit(1);
@@ -584,7 +654,7 @@ int main(int argc, char **argv) {
     }
     printf("Using kernel %d\n", kernel_num);
 
-    int block_sizes[] = {32, 64, 128, 256, 512, 1024};
+    int block_sizes[] = {64, 128, 256, 512, 1024};
 
     layernorm_forward_cpu(out, mean, rstd, inp, weight, bias, B, T, C);
 
