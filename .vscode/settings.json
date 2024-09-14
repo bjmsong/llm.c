@@ -5,7 +5,7 @@
         "-I${workspaceFolder}",
         "-I/usr/local/cuda/targets/x86_64-linux/include",
         "-I/root/miniconda3/include",
-        "-I/usr/include/c++/9",
+        "-I/usr/include/c++/11",
         "-I/usr/include",
         "--gcc-toolchain=/usr/bin/gcc"
     ]

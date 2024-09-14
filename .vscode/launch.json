@@ -2,12 +2,12 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "CUDA C++: Launch",
             "type": "cuda-gdb",
             "request": "launch",
-            "name": "CUDA C++: Launch",
-            "program": "${workspaceFolder}/dev/cuda/layernorm_forward",
-            "args": [8],
             "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/dev/cuda/layernorm_forward",
+            "args": [8]
         }
     ]
 }
