@@ -23,6 +23,9 @@ OMP_NUM_THREADS=32 ./matmul_forward 3
 #include <omp.h>
 #include "common.h"
 
+// Batch GEMM
+// inp(B,T,C) * weight^T(C, OC) + bias(OC) = out(B,T,OC)
+
 // ----------------------------------------------------------------------------
 // CPU code reference
 
@@ -341,7 +344,6 @@ void matmul_forward(int kernel_num,
 }
 
 // ----------------------------------------------------------------------------
-
 int main(int argc, char **argv) {
     srand(0);
 
