@@ -24,14 +24,16 @@ void matmul_backward_cpu(float* dinp, float* dweight, float* dbias,
     // this backward could be done in a single "round" of loops
     // but that doesn't afford an efficient parallelization strategy
 
+    // dL/dinp(B, T, C) = dout(B, T, OC) * weight(OC, C)
     // backward into inp first, parallelize over B,T
+    // utilize cache locality of weight matrix
     #pragma omp parallel for collapse(2)
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
-            float* dout_bt = dout + b * T * OC + t * OC;
-            float* dinp_bt = dinp + b * T * C + t * C;
+            float* dout_bt = dout + b * T * OC + t * OC;   // pointer to the t th row
+            float* dinp_bt = dinp + b * T * C + t * C;     // pointer to the t th row
             for (int o = 0; o < OC; o++) {
-                float* wrow = weight + o*C;
+                float* wrow = weight + o*C;    // pointer to the o th row
                 float d = dout_bt[o];
                 for (int i = 0; i < C; i++) {
                     dinp_bt[i] += wrow[i] * d;
@@ -199,11 +201,11 @@ int main(int argc, char **argv) {
     cublasMath_t cublas_math_mode = enable_tf32 ? CUBLAS_TF32_TENSOR_OP_MATH : CUBLAS_DEFAULT_MATH;
     cublasCheck(cublasSetMathMode(cublas_handle, cublas_math_mode));
 
-    // out(BT, OC) = inp(BT, C) * weight^T (C, OC) + bias(OC)
+    // out(B, T, OC) = inp(B, T, C) * weight^T (C, OC) + bias(OC)
     // create host memory of random numbers
     float* dout = make_random_float(B * T * OC);    // dL/dout, L is loss value which is a scalar
-    float* dinp = make_zeros_float(B * T * C);      // dL/dinp(BT, C) = dout(BT, OC) * weight(OC, C)
-    float* dweight = make_zeros_float(OC * C);      // dL/dweight(C, OC) = inp^T(C, BT) * dout(BT, OC)
+    float* dinp = make_zeros_float(B * T * C);      // dL/dinp(B, T, C) = dout(B, T, OC) * weight(OC, C)
+    float* dweight = make_zeros_float(OC * C);      // dL/dweight(C, OC) = inp^T(C, B, T) * dout(B, T, OC)
     float* dbias = make_zeros_float(OC);
     float* inp = make_random_float(B * T * C);
     float* weight = make_random_float(OC * C);
