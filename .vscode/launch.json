@@ -6,7 +6,7 @@
             "type": "cuda-gdb",
             "request": "launch",
             "cwd": "${workspaceFolder}",
-            "program": "${workspaceFolder}/dev/cuda/layernorm_forward",
+            "program": "${workspaceFolder}/dev/cuda/matmul_backward",
             "args": [8]
         }
     ]

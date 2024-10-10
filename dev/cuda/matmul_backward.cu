@@ -199,11 +199,12 @@ int main(int argc, char **argv) {
     cublasMath_t cublas_math_mode = enable_tf32 ? CUBLAS_TF32_TENSOR_OP_MATH : CUBLAS_DEFAULT_MATH;
     cublasCheck(cublasSetMathMode(cublas_handle, cublas_math_mode));
 
+    // out(BT, OC) = inp(BT, C) * weight^T (C, OC) + bias(OC)
     // create host memory of random numbers
-    float* dinp = make_zeros_float(B * T * C);
-    float* dweight = make_zeros_float(OC * C);
+    float* dout = make_random_float(B * T * OC);    // dL/dout, L is loss value which is a scalar
+    float* dinp = make_zeros_float(B * T * C);      // dL/dinp(BT, C) = dout(BT, OC) * weight(OC, C)
+    float* dweight = make_zeros_float(OC * C);      // dL/dweight(C, OC) = inp^T(C, BT) * dout(BT, OC)
     float* dbias = make_zeros_float(OC);
-    float* dout = make_random_float(B * T * OC);
     float* inp = make_random_float(B * T * C);
     float* weight = make_random_float(OC * C);
     float* ones = make_ones_float(OC);
