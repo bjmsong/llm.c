@@ -24,9 +24,10 @@ void matmul_backward_cpu(float* dinp, float* dweight, float* dbias,
     // this backward could be done in a single "round" of loops
     // but that doesn't afford an efficient parallelization strategy
 
+    // Batch GEMM
     // dL/dinp(B, T, C) = dout(B, T, OC) * weight(OC, C)
     // backward into inp first, parallelize over B,T
-    // utilize cache locality of weight matrix
+    // utilize cache locality of weight, dinp
     #pragma omp parallel for collapse(2)
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
