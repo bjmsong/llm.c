@@ -91,19 +91,19 @@ void layernorm_backward_cpu(float* dinp, float* dweight, float* dbias,
 
             // now iterate again and accumulate all the gradients
             for (int i = 0; i < C; i++) {
-                float norm_bti = (inp_bt[i] - mean_bt) * rstd_bt;
+                float norm_bti = (inp_bt[i] - mean_bt) * rstd_bt;  // x^
                 float dnorm_i = weight[i] * dout_bt[i];
                 // gradient contribution to bias
-                dbias[i] += dout_bt[i];
+                dbias[i] += dout_bt[i];     // dbias = sum(dout)
                 // gradient contribution to weight
-                dweight[i] += norm_bti * dout_bt[i];
+                dweight[i] += norm_bti * dout_bt[i];   // dweight = sum(dout * x^)
                 // gradient contribution to input
                 float dval = 0.0f;
                 dval += dnorm_i; // term 1
                 dval -= dnorm_mean; // term 2
                 dval -= norm_bti * dnorm_norm_mean; // term 3
                 dval *= rstd_bt; // final scale
-                dinp_bt[i] += dval;
+                dinp_bt[i] += dval;  // TODO: += should be = 
             }
         }
     }
