@@ -93,17 +93,18 @@ void attention_forward_cpu(float* out, float* preatt, float* att,
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             for (int h = 0; h < NH; h++) {
-                const float* query_t = inp + b * T * C3 + t * C3 + h * hs;
-                float* preatt_bth = preatt + b*NH*T*T + h*T*T + t*T;
-                float* att_bth = att + b*NH*T*T + h*T*T + t*T;
+                const float* query_t = inp + b * T * C3 + t * C3 + h * hs;  // query of sample b, position t, head h
+                float* preatt_bth = preatt + b*NH*T*T + h*T*T + t*T;        // temp value of attention score of sample b, head h, position t
+                float* att_bth = att + b*NH*T*T + h*T*T + t*T;              // attention score of sample b, head h, position t 
 
                 // pass 1: calculate query dot key and maxval
                 float maxval = -FLT_MAX;
                 for (int t2 = 0; t2 <= t; t2++) {
+                    // key of sample b, position t2, head h
                     const float* key_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C; // +C because it's key
 
                     // (query_t) dot (key_t2)
-                    float val = 0.0f;
+                    float val = 0.0f;     // attention score
                     for (int i = 0; i < hs; i++) {
                         val += query_t[i] * key_t2[i];
                     }
@@ -115,12 +116,14 @@ void attention_forward_cpu(float* out, float* preatt, float* att,
                     preatt_bth[t2] = val;
                 }
                 // pad with -INFINITY outside of autoregressive region for debugging comparisons
+                // avoid overflow in exp
                 for (int t2 = t+1; t2 < T; t2++) {
                     preatt_bth[t2] = -INFINITY;
                 }
 
                 // pass 2: calculate the exp and keep track of sum
                 float expsum = 0.0f;
+                // causual mask, calculate softmax in position <= t 
                 for (int t2 = 0; t2 <= t; t2++) {
                     float expv = expf(preatt_bth[t2] - maxval);
                     expsum += expv;
@@ -140,9 +143,10 @@ void attention_forward_cpu(float* out, float* preatt, float* att,
                 }
 
                 // pass 4: accumulate weighted values into the output of attention
-                float* out_bth = out + b * T * C + t * C + h * hs;
+                float* out_bth = out + b * T * C + t * C + h * hs;     // output of sample b, position t, head h
                 for (int i = 0; i < hs; i++) { out_bth[i] = 0.0f; }
                 for (int t2 = 0; t2 <= t; t2++) {
+                    // value of sample b, position t2, head h
                     const float* value_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C*2; // +C*2 because it's value
                     float att_btht2 = att_bth[t2];
                     for (int i = 0; i < hs; i++) {
@@ -163,7 +167,7 @@ __global__ void attention_query_key_kernel1(float* preatt, const float* inp,
     int total_threads = B * NH * T * T;
 
     if (idx < total_threads) {
-        int t2 = idx % T;
+        int t2 = idx % T;     
         int t = (idx / T) % T;
         if (t2 > t) {
             // autoregressive mask
@@ -175,7 +179,9 @@ __global__ void attention_query_key_kernel1(float* preatt, const float* inp,
 
         int C3 = C*3;
         int hs = C / NH; // head size
+        // query of sample b, position t, head h
         const float* query_t = inp + b * T * C3 + t * C3 + h * hs;
+        // key of sample b, position t2, head h
         const float* key_t2 = inp + b * T * C3 + t2 * C3 + h * hs + C; // +C because it's key
 
         // (query_t) dot (key_t2)
@@ -796,6 +802,7 @@ void attention_forward3(float* out, float* vaccum, float* qkvr, float* preatt, f
     // batched matrix multiply with cuBLAS
     const float alpha = 1.0f;
     const float beta = 0.0f;
+    // q(B, NH, T, HS) * k(B, NH, HS, T) = preatt(B, NH, T, T)
     cublasCheck(cublasSgemmStridedBatched(cublas_handle,
                             CUBLAS_OP_T, CUBLAS_OP_N,
                             T, T, HS,
@@ -1273,10 +1280,10 @@ void attention_forward(int kernel_num,
 int main(int argc, char **argv) {
     setup_main();
 
-    int B = 8;
-    int T = 1024;
-    int C = 768;
-    int NH = 12;
+    int B = 8;   // batch size
+    int T = 1024;  // sequence length
+    int C = 768;   // hidden dimesion
+    int NH = 12;    // heads num
 
     int deviceIdx = 0;
     cudaCheck(cudaSetDevice(deviceIdx));
@@ -1295,11 +1302,11 @@ int main(int argc, char **argv) {
     #endif
 
     // create host memory of random numbers
-    float* out = (float*)malloc(B * T * C * sizeof(float));
-    float* preatt = (float*)malloc(B * NH * T * T * sizeof(float));
-    float* att = (float*)malloc(B * NH * T * T * sizeof(float));
+    float* out = (float*)malloc(B * T * C * sizeof(float));         // output of attention
+    float* preatt = (float*)malloc(B * NH * T * T * sizeof(float));  // 
+    float* att = (float*)malloc(B * NH * T * T * sizeof(float));   // attention score
     //float* inp = make_random_float(B * T * 3 * C, 10.0f);
-    float* inp = make_random_float(B * T * 3 * C);
+    float* inp = make_random_float(B * T * 3 * C);  // Query+Key+Value
 
     // move to GPU
     float* d_out;
